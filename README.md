@@ -1,2 +1,2 @@
-# PitasLab
+# Catalogo
 Catálogo Pita's Lab
