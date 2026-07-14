@@ -6,14 +6,13 @@
 <title>Pita's Lab — Catálogo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   /* ============================================================
      PITA'S LAB — CATÁLOGO
      Como editar:
      - Produtos: ver array PRODUCTS no <script> abaixo.
-     - Dados do Pix: ver objeto PIX_CONFIG no <script> abaixo.
+     - Dados do WhatsApp: ver objeto WHATSAPP_CONFIG no <script> abaixo.
      ============================================================ */
   :root{
     --bg: #16151a;
@@ -341,29 +340,17 @@
   <div class="modal-bg" id="modalBg"></div>
   <div class="modal-box">
     <h3>Finalizar pedido</h3>
-    <p class="modal-sub">Confirme seus dados para gerar o Pix.</p>
+    <p class="modal-sub">Confirme seus dados para enviar o pedido pelo WhatsApp.</p>
 
     <div class="field">
       <label>Seu nome</label>
       <input type="text" id="custName" placeholder="Como podemos te chamar">
     </div>
-    <div class="field">
-      <label>WhatsApp (opcional)</label>
-      <input type="text" id="custPhone" placeholder="(11) 90000-0000">
-    </div>
 
     <div class="receipt" id="receiptBox"></div>
 
-    <button class="gen-btn" id="genPixBtn">Gerar código Pix</button>
-
-    <div class="pix-result" id="pixResult">
-      <div id="qrcode"></div>
-      <div class="pix-copy">
-        <input type="text" id="pixCode" readonly>
-        <button id="copyPixBtn">Copiar</button>
-      </div>
-      <p class="pix-note">Abra o app do seu banco → Pix → Pix Copia e Cola → cole o código acima. Após o pagamento, envie o comprovante para confirmar o pedido.</p>
-    </div>
+    <button class="gen-btn" id="sendWhatsAppBtn">Enviar pedido pelo WhatsApp</button>
+    <p class="pix-note">Vamos combinar pagamento e retirada/entrega direto na conversa.</p>
   </div>
 </div>
 
@@ -438,18 +425,6 @@ async function loadProductsFromPitaLab() {
    ============================================================ */
 const WHATSAPP_CONFIG = {
   number: '5511983844820',
-};
-
-/* ============================================================
-   2) CONFIGURAÇÃO DO PIX — troque pelos seus dados reais
-   key: sua chave Pix (cpf/cnpj/email/telefone/aleatória)
-   name: nome do recebedor, até 25 caracteres, sem acento
-   city: cidade do recebedor, até 15 caracteres, sem acento
-   ============================================================ */
-const PIX_CONFIG = {
-  key: '+5511983844820',
-  name: 'PITAS LAB',
-  city: 'SAO PAULO',
 };
 
 /* ============================================================
@@ -619,8 +594,6 @@ overlay.addEventListener('click', ()=>{ closeDrawer(); closeModal(); });
 const modal = document.getElementById('checkoutModal');
 function openModal(){
   renderReceipt();
-  document.getElementById('pixResult').classList.remove('show');
-  document.getElementById('genPixBtn').style.display = 'block';
   modal.classList.add('show');
 }
 function closeModal(){ modal.classList.remove('show'); }
@@ -640,83 +613,26 @@ function renderReceipt(){
 }
 
 /* ============================================================
-   3) GERAÇÃO DO PIX (Copia e Cola / BR Code — padrão EMV)
+   3) FINALIZAR PEDIDO PELO WHATSAPP
+   Não gera Pix nem dá baixa no estoque — isso é feito manualmente
+   pelo vendedor no Portal do Vendedor depois de combinar com o
+   cliente. Aqui só monta a mensagem com a lista do carrinho.
    ============================================================ */
-function emv(id, value){
-  const len = String(value.length).padStart(2,'0');
-  return `${id}${len}${value}`;
-}
-function crc16(payload){
-  let poly = 0x1021, result = 0xFFFF;
-  for(let i=0;i<payload.length;i++){
-    result ^= (payload.charCodeAt(i) << 8);
-    for(let b=0;b<8;b++){
-      result = (result & 0x8000) ? ((result << 1) ^ poly) : (result << 1);
-      result &= 0xFFFF;
-    }
-  }
-  return result.toString(16).toUpperCase().padStart(4,'0');
-}
-function stripAccents(s){
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-}
-function buildPixPayload({key, name, city, amount, txid}){
-  const cleanName = stripAccents(name).toUpperCase().slice(0,25);
-  const cleanCity = stripAccents(city).toUpperCase().slice(0,15);
-  const cleanTxid = (txid || '***').replace(/[^A-Za-z0-9]/g,'').slice(0,25) || '***';
+document.getElementById('sendWhatsAppBtn').addEventListener('click', () => {
+  const items = cartEntries();
+  if (items.length === 0) return;
+  const name = document.getElementById('custName').value.trim();
 
-  const merchantAccount = emv('00','br.gov.bcb.pix') + emv('01', key);
-  const addData = emv('05', cleanTxid);
+  const linesText = items.map(({ product, qty }) =>
+    `• ${qty}x ${product.name} — ${fmtBRL(product.price * qty)}`
+  ).join('\n');
 
-  let payload =
-    emv('00','01') +
-    emv('26', merchantAccount) +
-    emv('52','0000') +
-    emv('53','986') +
-    emv('54', amount.toFixed(2)) +
-    emv('58','BR') +
-    emv('59', cleanName) +
-    emv('60', cleanCity) +
-    emv('62', addData);
+  const greeting = name ? `Olá! Meu nome é ${name}.` : 'Olá!';
+  const msg = `${greeting} Gostaria de fazer o seguinte pedido:\n\n${linesText}\n\nTotal: ${fmtBRL(cartTotal())}\n\nComo faço para pagar e retirar/receber?`;
 
-  payload += '6304';
-  const crc = crc16(payload);
-  return payload + crc;
-}
-
-document.getElementById('genPixBtn').addEventListener('click', ()=>{
-  const total = cartTotal();
-  if(total <= 0) return;
-  const name = document.getElementById('custName').value.trim() || 'Cliente';
-  const txid = 'PITASLAB' + Date.now().toString().slice(-8);
-
-  const payload = buildPixPayload({
-    key: PIX_CONFIG.key,
-    name: PIX_CONFIG.name,
-    city: PIX_CONFIG.city,
-    amount: total,
-    txid,
-  });
-
-  document.getElementById('pixCode').value = payload;
-  document.getElementById('qrcode').innerHTML = '';
-  new QRCode(document.getElementById('qrcode'), {
-    text: payload, width: 190, height: 190,
-    colorDark:'#16151a', colorLight:'#ffffff',
-  });
-  document.getElementById('pixResult').classList.add('show');
-  document.getElementById('genPixBtn').style.display = 'none';
-});
-
-document.getElementById('copyPixBtn').addEventListener('click', ()=>{
-  const input = document.getElementById('pixCode');
-  input.select();
-  navigator.clipboard.writeText(input.value).then(()=>{
-    const btn = document.getElementById('copyPixBtn');
-    const old = btn.textContent;
-    btn.textContent = 'Copiado!';
-    setTimeout(()=> btn.textContent = old, 1200);
-  });
+  const url = `https://wa.me/${WHATSAPP_CONFIG.number}?text=${encodeURIComponent(msg)}`;
+  window.open(url, '_blank');
+  closeModal();
 });
 
 /* init */
